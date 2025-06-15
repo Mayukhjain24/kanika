@@ -222,6 +222,7 @@ if uploaded_file is not None:
         text_position = st.sidebar.selectbox("Text Position", ["inside", "outside", "auto"], index=2)
         label_font_size = st.sidebar.slider("Label Font Size", min_value=8, max_value=20, value=12)
         label_font_color = st.sidebar.color_picker("Label Font Color", value="#FFFFFF")
+        opacity = st.sidebar.slider("Slice Opacity (0-1)", min_value=0.5, max_value=1.0, value=0.9, step=0.1)
         use_3d = st.sidebar.checkbox("3D Effect", value=False)
         border_width = st.sidebar.slider("Slice Border Width", min_value=0, max_value=5, value=1)
         border_color = st.sidebar.color_picker("Slice Border Color", value="#000000")
@@ -242,7 +243,7 @@ if uploaded_file is not None:
         show_grid = st.sidebar.checkbox("Show Grid", value=False)
         show_tooltips = st.sidebar.checkbox("Show Tooltips", value=True)
 
-    # Color mapping with gradient support
+    # Color mapping
     color_map = {
         "Viridis": px.colors.sequential.Viridis,
         "Plasma": px.colors.sequential.Plasma,
@@ -260,7 +261,6 @@ if uploaded_file is not None:
             if sort_by_value:
                 agg_df = agg_df.sort_values('Count', ascending=False)
             if chart_type in ["Pie Chart", "Donut Chart"]:
-                # Calculate dynamic pie size based on number of slices
                 num_slices = len(agg_df)
                 pie_size = min(800, 400 + num_slices * 20)
                 fig = go.Figure(data=[
@@ -278,10 +278,10 @@ if uploaded_file is not None:
                         rotation=rotation_angle,
                         hoverinfo='label+percent+value' if show_tooltips else 'none',
                         hole=0.4 if chart_type == "Donut Chart" else 0,
+                        opacity=opacity,
                         showlegend=True
                     )
                 ])
-                # Apply 3D effect via layout if enabled
                 if use_3d:
                     fig.update_layout(
                         scene=dict(
@@ -292,11 +292,7 @@ if uploaded_file is not None:
                         ),
                         margin=dict(l=0, r=0, t=50, b=0)
                     )
-                # Add animation
-                fig.update_traces(
-                    opacity=0.9,
-                    transition=dict(duration=500, easing='cubic-in-out')
-                )
+                fig.update_traces(opacity=opacity)
             elif chart_type == "Bar Chart":
                 if orientation == "horizontal":
                     fig = px.bar(
@@ -332,7 +328,6 @@ if uploaded_file is not None:
             else:
                 color_col = group_by_cols[0]
                 size_col = weight_col
-            # Validate hover_data columns
             hover_data_cols = [col for col in group_by_cols_mapped if col in filtered_df.columns]
             try:
                 fig = px.scatter(
@@ -340,7 +335,9 @@ if uploaded_file is not None:
                     x=x_axis,
                     y=y_axis,
                     color=group_by_col_mappings.get(color_col, color_col),
-                    size=filtered_df[group_by_col_mappings.get(size_col, size_col)].fillna(filtered_df[size_col].mean() if size_col in filtered_df.columns else 1),
+                    size=filtered_df[group_by_col_mappings.get(size_col, size_col)].fillna(
+                        filtered_df[size_col].mean() if size_col in filtered_df.columns else 1
+                    ),
                     size_max=marker_size,
                     symbol=marker_symbol,
                     color_discrete_sequence=colors if not pd.api.types.is_numeric_dtype(filtered_df[group_by_col_mappings.get(color_col, color_col)]) else None,

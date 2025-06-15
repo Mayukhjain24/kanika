@@ -9,7 +9,7 @@ st.set_page_config(page_title="ICMR Data Visualization", layout="wide")
 
 # Title and description
 st.title("ICMR Maternal and Newborn Data Dashboard")
-st.markdown("Upload your CSV to explore Haemoglobin, Blood Group, Cord Blood, Head Circumference, Length, and Weight with advanced grouping.")
+st.markdown("Upload your CSV to explore Haemoglobin, Blood Group, Cord Blood, Head Circumference, Length, and Weight with enhanced pie charts.")
 
 # File uploader
 uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
@@ -35,7 +35,7 @@ if uploaded_file is not None:
     parity_col = 'Parity of Mother'
 
     # Check if required columns exist
-    required_cols = [mother_haemoglobin_col, blood_group_col, cord_haemoglobin_col, head_circum_day1_col, head_circum_day3_col, length_col, weight_col, sex_col]
+    required_cols = [mother_haemoglobin_col, blood_group_col, cord_haemoglobin_col, head_circum_day1_col, head_circum_day3_col, length_col, weight_col]
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         st.error(f"Missing columns in CSV: {missing_cols}")
@@ -46,7 +46,7 @@ if uploaded_file is not None:
     df[sex_col] = df[sex_col].str.lower().str.strip().replace({
         'm': 'male', 'f': 'female', 'o': 'other', 'u': 'unknown',
         'boy': 'male', 'girl': 'female', 'not specified': 'unknown'
-    }).fillna('unknown')
+    }).fillna('unknown') if sex_col in df.columns else pd.Series('unknown', index=df.index)
     df[blood_group_col] = df[blood_group_col].str.strip().str.upper()
 
     # Clean numerical data
@@ -94,7 +94,7 @@ if uploaded_file is not None:
         f"Select {sex_col}",
         options=gender_options,
         default=gender_options
-    )
+    ) if sex_col in df.columns else gender_options
 
     # Apply filters
     filtered_df = df[
@@ -103,16 +103,16 @@ if uploaded_file is not None:
         (df[head_circum_day1_col].between(head_circum_day1_range[0], head_circum_day1_range[1], inclusive='both')) &
         (df[weight_col].between(weight_range[0], weight_range[1], inclusive='both')) &
         (df[blood_group_col].isin(selected_blood_groups)) &
-        (df[sex_col].isin(selected_sex))
+        (df[sex_col].isin(selected_sex) if sex_col in df.columns else True)
     ]
 
-    # Define 'Group By' options
-    possible_group_by_cols = [
+    # Define compulsory 'Group By' columns
+    compulsory_group_by_cols = [
         mother_haemoglobin_col, blood_group_col, cord_haemoglobin_col,
-        head_circum_day1_col, head_circum_day3_col, length_col, weight_col,
-        sex_col, address_col, parity_col
+        head_circum_day1_col, head_circum_day3_col, length_col, weight_col
     ]
-    available_group_by_cols = [col for col in possible_group_by_cols if col in df.columns]
+    optional_group_by_cols = [col for col in [sex_col, address_col, parity_col] if col in df.columns]
+    available_group_by_cols = compulsory_group_by_cols + optional_group_by_cols
 
     # Chart customization
     st.sidebar.header("Chart Customization")
@@ -124,7 +124,7 @@ if uploaded_file is not None:
     group_by_cols = st.sidebar.multiselect(
         "Group By (select multiple for combined grouping)",
         options=available_group_by_cols,
-        default=[weight_col, sex_col]
+        default=[weight_col, sex_col] if sex_col in df.columns else [weight_col]
     )
 
     if not group_by_cols:
@@ -164,7 +164,7 @@ if uploaded_file is not None:
             selected_ranges = st.sidebar.multiselect(
                 f"Select ranges for {col}",
                 options=range_options.get(col, []),
-                default=range_options.get(col, [])[:3]  # Default to first 3 ranges
+                default=range_options.get(col, [])[:3]
             )
             if not selected_ranges:
                 st.error(f"Please select at least one range for {col}.")
@@ -172,12 +172,12 @@ if uploaded_file is not None:
             try:
                 bin_edges = []
                 bin_labels = []
-                for r in selected_ranges:
+                sorted_ranges = sorted(selected_ranges, key=lambda x: float(x.split('-')[0]))
+                for r in sorted_ranges:
                     start, end = map(float, r.split('-'))
                     bin_edges.append(start)
                     bin_labels.append(r)
                 bin_edges.append(end)
-                # Extend edges to cover data range
                 min_val = filtered_df[col].min()
                 max_val = filtered_df[col].max()
                 if pd.notna(min_val) and min_val < bin_edges[0]:
@@ -202,7 +202,11 @@ if uploaded_file is not None:
 
     # Create combined group column
     group_by_cols_mapped = [group_by_col_mappings[col] for col in group_by_cols]
-    filtered_df['combined_group'] = filtered_df[group_by_cols_mapped].astype(str).agg('_'.join, axis=1)
+    valid_group_by_cols_mapped = [col for col in group_by_cols_mapped if col in filtered_df.columns]
+    if not valid_group_by_cols_mapped:
+        st.error("No valid 'Group By' columns after binning. Please check selected ranges.")
+        st.stop()
+    filtered_df['combined_group'] = filtered_df[valid_group_by_cols_mapped].astype(str).agg('_'.join, axis=1)
     group_by_col = 'combined_group'
 
     # Additional customization options
@@ -213,14 +217,17 @@ if uploaded_file is not None:
     chart_title = st.sidebar.text_input("Chart Title", value=f"{chart_type} by {', '.join(group_by_cols)}")
 
     # Chart-specific options
+    sort_by_value = st.sidebar.checkbox("Sort by Value", value=False)
     if chart_type in ["Pie Chart", "Donut Chart"]:
-        sort_by_value = st.sidebar.checkbox("Sort by Value", value=False)
         text_position = st.sidebar.selectbox("Text Position", ["inside", "outside", "auto"], index=2)
-        show_labels = st.sidebar.checkbox("Show Labels", value=True)
-        show_percent = st.sidebar.checkbox("Show Percentages", value=True)
+        label_font_size = st.sidebar.slider("Label Font Size", min_value=8, max_value=20, value=12)
+        label_font_color = st.sidebar.color_picker("Label Font Color", value="#FFFFFF")
+        use_3d = st.sidebar.checkbox("3D Effect", value=False)
+        border_width = st.sidebar.slider("Slice Border Width", min_value=0, max_value=5, value=1)
+        border_color = st.sidebar.color_picker("Slice Border Color", value="#000000")
+        show_tooltips = st.sidebar.checkbox("Show Tooltips", value=True)
         explode_slice = st.sidebar.slider("Explode Slice (0-1)", min_value=0.0, max_value=1.0, value=0.1, step=0.1)
         rotation_angle = st.sidebar.slider("Rotation Angle (degrees)", min_value=0, max_value=360, value=0)
-        show_tooltips = st.sidebar.checkbox("Show Tooltips", value=True)
     elif chart_type == "Bar Chart":
         orientation = st.sidebar.selectbox("Orientation", ["vertical", "horizontal"])
         bar_width = st.sidebar.slider("Bar Width", min_value=0.1, max_value=1.0, value=0.8)
@@ -235,7 +242,7 @@ if uploaded_file is not None:
         show_grid = st.sidebar.checkbox("Show Grid", value=False)
         show_tooltips = st.sidebar.checkbox("Show Tooltips", value=True)
 
-    # Color mapping
+    # Color mapping with gradient support
     color_map = {
         "Viridis": px.colors.sequential.Viridis,
         "Plasma": px.colors.sequential.Plasma,
@@ -250,35 +257,46 @@ if uploaded_file is not None:
     else:
         if chart_type in ["Pie Chart", "Donut Chart", "Bar Chart"]:
             agg_df = filtered_df.groupby(group_by_col, observed=True).size().reset_index(name='Count')
-            if sort_by_value and chart_type in ["Pie Chart", "Donut Chart"]:
+            if sort_by_value:
                 agg_df = agg_df.sort_values('Count', ascending=False)
-            if chart_type == "Pie Chart":
+            if chart_type in ["Pie Chart", "Donut Chart"]:
+                # Calculate dynamic pie size based on number of slices
+                num_slices = len(agg_df)
+                pie_size = min(800, 400 + num_slices * 20)
                 fig = go.Figure(data=[
                     go.Pie(
                         labels=agg_df[group_by_col],
                         values=agg_df['Count'],
-                        textinfo='label+percent' if show_labels and show_percent else 'label' if show_labels else 'percent' if show_percent else None,
-                        marker=dict(colors=colors),
-                        pull=[explode_slice if i == 0 else 0 for i in range(len(agg_df))],
+                        textinfo='label+percent',
                         textposition=text_position,
+                        textfont=dict(size=label_font_size, color=label_font_color),
+                        marker=dict(
+                            colors=colors,
+                            line=dict(color=border_color, width=border_width)
+                        ),
+                        pull=[explode_slice if i == 0 else 0 for i in range(num_slices)],
                         rotation=rotation_angle,
-                        hoverinfo='label+percent+value' if show_tooltips else 'none'
+                        hoverinfo='label+percent+value' if show_tooltips else 'none',
+                        hole=0.4 if chart_type == "Donut Chart" else 0,
+                        showlegend=True
                     )
                 ])
-            elif chart_type == "Donut Chart":
-                fig = go.Figure(data=[
-                    go.Pie(
-                        labels=agg_df[group_by_col],
-                        values=agg_df['Count'],
-                        textinfo='label+percent' if show_labels and show_percent else 'label' if show_labels else 'percent' if show_percent else None,
-                        marker=dict(colors=colors),
-                        pull=[explode_slice if i == 0 else 0 for i in range(len(agg_df))],
-                        textposition=text_position,
-                        rotation=rotation_angle,
-                        hole=0.4,
-                        hoverinfo='label+percent+value' if show_tooltips else 'none'
+                # Apply 3D effect via layout if enabled
+                if use_3d:
+                    fig.update_layout(
+                        scene=dict(
+                            aspectmode="cube",
+                            xaxis=dict(visible=False),
+                            yaxis=dict(visible=False),
+                            zaxis=dict(visible=False)
+                        ),
+                        margin=dict(l=0, r=0, t=50, b=0)
                     )
-                ])
+                # Add animation
+                fig.update_traces(
+                    opacity=0.9,
+                    transition=dict(duration=500, easing='cubic-in-out')
+                )
             elif chart_type == "Bar Chart":
                 if orientation == "horizontal":
                     fig = px.bar(
@@ -314,31 +332,38 @@ if uploaded_file is not None:
             else:
                 color_col = group_by_cols[0]
                 size_col = weight_col
-            fig = px.scatter(
-                filtered_df,
-                x=x_axis,
-                y=y_axis,
-                color=group_by_col_mappings.get(color_col, color_col),
-                size=filtered_df[group_by_col_mappings.get(size_col, size_col)].fillna(0),
-                size_max=marker_size,
-                symbol=marker_symbol,
-                color_discrete_sequence=colors if not pd.api.types.is_numeric_dtype(filtered_df[color_col]) else None,
-                color_continuous_scale=colors if pd.api.types.is_numeric_dtype(filtered_df[color_col]) else None,
-                trendline="ols" if add_trendline else None,
-                labels={x_axis: x_axis, y_axis: y_axis},
-                hover_data=group_by_cols_mapped if show_tooltips else None
-            )
+            # Validate hover_data columns
+            hover_data_cols = [col for col in group_by_cols_mapped if col in filtered_df.columns]
+            try:
+                fig = px.scatter(
+                    filtered_df,
+                    x=x_axis,
+                    y=y_axis,
+                    color=group_by_col_mappings.get(color_col, color_col),
+                    size=filtered_df[group_by_col_mappings.get(size_col, size_col)].fillna(filtered_df[size_col].mean() if size_col in filtered_df.columns else 1),
+                    size_max=marker_size,
+                    symbol=marker_symbol,
+                    color_discrete_sequence=colors if not pd.api.types.is_numeric_dtype(filtered_df[group_by_col_mappings.get(color_col, color_col)]) else None,
+                    color_continuous_scale=colors if pd.api.types.is_numeric_dtype(filtered_df[group_by_col_mappings.get(color_col, color_col)]) else None,
+                    trendline="ols" if add_trendline else None,
+                    labels={x_axis: x_axis, y_axis: y_axis},
+                    hover_data=hover_data_cols if show_tooltips and hover_data_cols else None
+                )
+            except ValueError as e:
+                st.error(f"Error generating scatter plot: {e}. Ensure selected columns contain valid numerical data.")
+                st.stop()
             fig.update_layout(
                 showlegend=True,
                 xaxis=dict(showgrid=show_grid),
-                yaxis=dict(showgrid=show_grid)
+                yaxis=dict(showgrid=show_grid),
+                hovermode='closest' if show_tooltips else False
             )
 
         # Update layout
         fig.update_layout(
             title=chart_title,
             showlegend=True,
-            height=600,
+            height=pie_size if chart_type in ["Pie Chart", "Donut Chart"] else 600,
             template=theme,
             font=dict(size=font_size),
             legend=dict(
